@@ -1,0 +1,6 @@
+[submodule "third-party/IFRExtractor-RS"]
+	path = third-party/IFRExtractor-RS
+	url = https://github.com/134ARG/IFRExtractor-RS-structured.git
+[submodule "third-party/UEFITool"]
+	path = third-party/UEFITool
+	url = https://github.com/LongSoft/UEFITool.git
