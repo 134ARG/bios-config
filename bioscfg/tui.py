@@ -37,10 +37,20 @@ def _draw(stdscr, settings: list[dict[str, Any]], summary: dict[str, int], searc
     offset = 0
     show_missing = True
     show_no_efivar = False
+    show_suppressed = False
+    # --- TEMP EXPERIMENT: distinct storage mode ---
+    show_distinct = False
+    # --- END TEMP EXPERIMENT ---
 
     while True:
         filtered = filter_settings(settings, grep=search or None)
         filtered = _visible_settings(filtered, show_missing, show_no_efivar)
+        if not show_suppressed:
+            filtered = [setting for setting in filtered if not _is_must_suppressed(setting)]
+        # --- TEMP EXPERIMENT: distinct storage mode ---
+        if show_distinct:
+            filtered = _experimental_distinct_settings(filtered)
+        # --- END TEMP EXPERIMENT ---
         root, nodes = _build_nav(filtered)
         if page_id not in nodes:
             page_id = ("root",)
@@ -70,6 +80,8 @@ def _draw(stdscr, settings: list[dict[str, Any]], summary: dict[str, int], searc
             search,
             show_missing,
             show_no_efivar,
+            show_suppressed,
+            show_distinct,
             len(filtered),
         )
 
@@ -114,6 +126,18 @@ def _draw(stdscr, settings: list[dict[str, Any]], summary: dict[str, int], searc
             page_id = ("root",)
             row = 0
             offset = 0
+        elif key in (ord("x"), ord("X")):
+            show_suppressed = not show_suppressed
+            page_id = ("root",)
+            row = 0
+            offset = 0
+        # --- TEMP EXPERIMENT: distinct storage mode ---
+        elif key in (ord("d"), ord("D")):
+            show_distinct = not show_distinct
+            page_id = ("root",)
+            row = 0
+            offset = 0
+        # --- END TEMP EXPERIMENT ---
         elif key in (10, 13):
             if rows:
                 selected = rows[row]
@@ -136,6 +160,8 @@ def _paint(
     search: str,
     show_missing: bool,
     show_no_efivar: bool,
+    show_suppressed: bool,
+    show_distinct: bool,
     shown_settings: int,
 ) -> None:
     h, w = stdscr.getmaxyx()
@@ -154,7 +180,7 @@ def _paint(
     _safe_addnstr(dialog, 0, max(1, (box_w - len(title)) // 2), title, box_w - 2, curses.A_BOLD)
     stats = f"settings {summary.get('total', 0)} | ok {summary.get('ok', 0)} | no efivar {summary.get('missing_efivar', 0)} | shown {shown_settings}"
     _safe_addnstr(dialog, 1, 2, stats, box_w - 4, curses.color_pair(5) | curses.A_BOLD)
-    filter_text = f"search: {search or '<none>'} | missing config: {'show' if show_missing else 'hide'} | no efivar: {'show' if show_no_efivar else 'hide'}"
+    filter_text = f"search: {search or '<none>'} | missing config: {'show' if show_missing else 'hide'} | no efivar: {'show' if show_no_efivar else 'hide'} | suppressed: {'show' if show_suppressed else 'hide'} | distinct: {'on' if show_distinct else 'off'}"
     _safe_addnstr(dialog, 2, 2, filter_text, box_w - 4, curses.color_pair(1))
 
     header_y = HEADER_Y
@@ -162,7 +188,7 @@ def _paint(
     page_title = _breadcrumb(page)
     _safe_addnstr(dialog, header_y, 2, page_title, table_w, curses.color_pair(1) | curses.A_BOLD)
     widths = _column_widths(table_w)
-    header = _fit_cols(["Page / Setting", "Current", "Default", "Location", "Status"], widths, table_w)
+    header = _fit_cols(["Offset", "Page / Setting", "Current", "Default", "Location", "Status"], widths, table_w)
     _safe_addnstr(dialog, header_y + 1, 2, header, table_w, curses.color_pair(1) | curses.A_UNDERLINE)
 
     for screen_idx in range(body_rows):
@@ -181,18 +207,12 @@ def _paint(
     _safe_hline(dialog, detail_y - 1, 1, "-", box_w - 2, curses.color_pair(1))
     if rows:
         selected = rows[row]
-        if selected["kind"] == "setting":
-            setting = selected["setting"]
-            raw = (setting.get("current") or {}).get("raw_hex") or ""
-            detail = f"path: {_setting_full_path(setting)} | raw: {raw}"
-        else:
-            node = selected["node"]
-            detail = f"path: {_breadcrumb(node)} | settings: {node['count']} | ok: {node['ok']} | other: {node['count'] - node['ok']}"
+        detail = _selection_detail(selected)
     else:
         detail = "empty"
     if detail:
         _safe_addnstr(dialog, detail_y, 2, detail, box_w - 4, curses.color_pair(1))
-    controls = "CONTROLS: [Enter] Open | [Left] Up | [/] Search | [C] Clear | [M] Missing | [E] EFI vars | [Q]uit"
+    controls = "CONTROLS: [Enter] Open | [Left] Up | [/] Search | [C] Clear | [M] Missing | [E] EFI vars | [X] Suppressed | [D] Distinct | [Q]uit"
     _safe_addnstr(dialog, box_h - 2, 2, controls, box_w - 4, curses.color_pair(1) | curses.A_BOLD)
     mode = " [ READ ONLY MODE ] "
     _safe_addnstr(dialog, box_h - 1, max(1, (box_w - len(mode)) // 2), mode, box_w - 2, curses.A_BOLD)
@@ -211,6 +231,91 @@ def _visible_settings(
     if not show_no_efivar:
         visible = [setting for setting in visible if not _is_missing_efivar(setting)]
     return visible
+
+
+def _is_must_suppressed(setting: dict[str, Any]) -> bool:
+    return bool((setting.get("visibility") or {}).get("always_suppressed"))
+
+
+def _selection_detail(row: dict[str, Any]) -> str:
+    if row["kind"] == "setting":
+        setting = row["setting"]
+        raw = (setting.get("current") or {}).get("raw_hex") or ""
+        detail = f"setting: {_setting_detail_name(setting)}"
+        return f"{detail} | raw: {raw}" if raw else detail
+
+    node = row["node"]
+    return f"page: {node['name']} | settings: {node['count']} | ok: {node['ok']} | other: {node['count'] - node['ok']}"
+
+
+def _setting_detail_name(setting: dict[str, Any]) -> str:
+    prompt = setting.get("prompt")
+    if prompt:
+        return str(prompt)
+    path = _setting_page_path(setting)
+    return path[-1] if path else "setting"
+
+
+# --- TEMP EXPERIMENT: distinct storage mode ---
+def _experimental_distinct_settings(settings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    winners: dict[tuple[Any, ...], dict[str, Any]] = {}
+    positions: dict[tuple[Any, ...], int] = {}
+
+    for setting in settings:
+        key = _experimental_distinct_key(setting)
+        if key is None:
+            out.append(setting)
+            continue
+
+        winner = winners.get(key)
+        if winner is None:
+            item = _experimental_distinct_copy(setting, [])
+            winners[key] = item
+            positions[key] = len(out)
+            out.append(item)
+            continue
+
+        if _experimental_distinct_score(setting) > _experimental_distinct_score(winner):
+            aliases = [_experimental_alias_label(winner), *winner.get("_distinct_aliases", [])]
+            item = _experimental_distinct_copy(setting, aliases)
+            winners[key] = item
+            out[positions[key]] = item
+        else:
+            winner["_distinct_aliases"].append(_experimental_alias_label(setting))
+            winner["_distinct_alias_count"] = len(winner["_distinct_aliases"])
+
+    return out
+
+
+def _experimental_distinct_key(setting: dict[str, Any]) -> tuple[Any, ...] | None:
+    varstore = setting.get("varstore") or {}
+    name = varstore.get("name")
+    guid = varstore.get("guid")
+    offset = setting.get("offset")
+    if not name or not guid or offset is None:
+        return None
+    size = setting.get("size_bits") or setting.get("max_size") or setting.get("size_bytes") or ""
+    return (str(name).lower(), str(guid).lower(), offset, setting.get("type") or "", size)
+
+
+def _experimental_distinct_score(setting: dict[str, Any]) -> tuple[int, int]:
+    status = (setting.get("current") or {}).get("status")
+    status_score = 2 if status == "ok" else 1 if status == "decoded_unknown_option" else 0
+    richness = len(setting.get("options") or []) + len(setting.get("defaults") or [])
+    return status_score, richness
+
+
+def _experimental_distinct_copy(setting: dict[str, Any], aliases: list[str]) -> dict[str, Any]:
+    item = dict(setting)
+    item["_distinct_aliases"] = aliases
+    item["_distinct_alias_count"] = len(aliases)
+    return item
+
+
+def _experimental_alias_label(setting: dict[str, Any]) -> str:
+    return _setting_full_path(setting)
+# --- END TEMP EXPERIMENT ---
 
 
 def _body_rows(height: int) -> int:
@@ -412,11 +517,12 @@ def _nav_row_line(row: dict[str, Any], widths: list[int], width: int) -> str:
 
 def _nav_page_line(page: dict[str, Any], widths: list[int], width: int) -> str:
     cols = [
-        clip(f"{page['name']}/", widths[0]),
-        clip(f"{page['ok']}/{page['count']}", widths[1]),
-        clip("", widths[2]),
+        clip("", widths[0]),
+        clip(f"{page['name']}/", widths[1]),
+        clip(f"{page['ok']}/{page['count']}", widths[2]),
         clip("", widths[3]),
-        clip("page", widths[4]),
+        clip("", widths[4]),
+        clip("page", widths[5]),
     ]
     return "  ".join(cols)[: max(0, width - 2)]
 
@@ -428,25 +534,41 @@ def _setting_full_path(setting: dict[str, Any]) -> str:
 
 def _setting_line(setting: dict[str, Any], widths: list[int], width: int) -> str:
     prompt = setting.get("prompt") or ""
+    offset = _setting_offset(setting)
     current = display_current(setting)
     default = display_default(setting)
     location = setting_location(setting)
     status = (setting.get("current") or {}).get("status", "")
+    if _is_must_suppressed(setting):
+        status = f"{status} suppressed".strip()
+    # --- TEMP EXPERIMENT: distinct storage mode ---
+    alias_count = setting.get("_distinct_alias_count") or 0
+    if alias_count:
+        status = f"{status} +{alias_count}"
+    # --- END TEMP EXPERIMENT ---
     cols = [
-        clip(prompt, widths[0]),
-        clip(current, widths[1]),
-        clip(default, widths[2]),
-        clip(location, widths[3]),
-        clip(status, widths[4]),
+        clip(offset, widths[0]),
+        clip(prompt, widths[1]),
+        clip(current, widths[2]),
+        clip(default, widths[3]),
+        clip(location, widths[4]),
+        clip(status, widths[5]),
     ]
     return "  ".join(cols)[: max(0, width - 2)]
 
 
 def _column_widths(width: int) -> list[int]:
-    other = [18, 16, 24, 16] if width >= 92 else [14, 12, 18, 12]
+    other = [10, 18, 16, 24, 16] if width >= 100 else [8, 14, 12, 18, 12]
     separators = 2 * len(other)
     label = max(18, width - 2 - sum(other) - separators)
-    return [label, *other]
+    return [other[0], label, *other[1:]]
+
+
+def _setting_offset(setting: dict[str, Any]) -> str:
+    offset = setting.get("offset")
+    if isinstance(offset, int):
+        return f"0x{offset:X}"
+    return ""
 
 
 def _fit_cols(cols: list[str], col_widths: list[int], width: int) -> str:
@@ -561,6 +683,16 @@ def _detail_lines(setting: dict[str, Any]) -> list[str]:
         f"raw: {current.get('raw_hex', '')}",
         f"help: {setting.get('help') or ''}",
     ]
+    # --- TEMP EXPERIMENT: distinct storage mode ---
+    aliases = setting.get("_distinct_aliases") or []
+    if aliases:
+        lines.append(f"distinct group: {len(aliases) + 1} questions")
+        lines.append("aliases:")
+        for alias in aliases[:20]:
+            lines.append(f"  {alias}")
+        if len(aliases) > 20:
+            lines.append(f"  ... {len(aliases) - 20} more")
+    # --- END TEMP EXPERIMENT ---
     options = setting.get("options") or []
     if options:
         lines.append("options:")

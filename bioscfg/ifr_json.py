@@ -81,6 +81,10 @@ def parse_ifr_file(path: Path) -> dict[str, Any]:
                 })
             continue
 
+        if opcode in ("True", "False"):
+            _record_constant_condition(stack, depth, opcode == "True")
+            continue
+
         if opcode in QUESTION_OPCODES:
             formset, form = _context(stack)
             setting = _question(opcode, fields)
@@ -247,10 +251,24 @@ def _visibility(stack: list[dict[str, Any]]) -> dict[str, Any]:
     opcodes = [condition["opcode"] for condition in conditions]
     return {
         "has_suppress_if": "SuppressIf" in opcodes,
+        "always_suppressed": any(
+            condition["opcode"] == "SuppressIf" and condition.get("constant") is True
+            for condition in conditions
+        ),
         "has_gray_out_if": "GrayOutIf" in opcodes,
         "evaluated": False,
         "raw_conditions": [json.dumps(condition, sort_keys=True) for condition in conditions],
     }
+
+
+def _record_constant_condition(stack: list[dict[str, Any]], depth: int, value: bool) -> None:
+    for entry in reversed(stack):
+        condition = entry.get("condition")
+        if condition is None:
+            continue
+        if depth == entry["depth"] + 1 and "constant" not in condition:
+            condition["constant"] = value
+        return
 
 
 def _setting_path(formset: dict[str, Any] | None, form: dict[str, Any] | None) -> list[str]:

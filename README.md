@@ -198,7 +198,7 @@ decode status. For example, this Curve Optimizer page is decoded from live
 Use a RAM-backed cache while iterating:
 
 ```bash
-CACHE="$(mktemp -d /tmp/bioscfg-cache.XXXXXX)"
+CACHE="$(mktemp -d /tmp/bioscfg-cache.XXXXXX)"N
 
 python3 -m bioscfg.cli tests/smoking/ROG-STRIX-B650E-I-GAMING-WIFI-ASUS-3854.CAP \
   --cache "$CACHE" \
@@ -299,11 +299,15 @@ Left    go up one page
 C       clear search
 M       show/hide missing config entries
 E       show/hide entries without live EFI vars
+X       show/hide entries under unconditional SuppressIf
+D       toggle experimental distinct-offset view
 Q       quit
 ```
 
 Entries without live EFI vars are hidden by default. Missing config/schema-side
-entries are controlled separately with `M`.
+entries are controlled separately with `M`. Entries under unconditional
+`SuppressIf True` are hidden by default because the firmware setup browser should
+never show them.
 
 ```text
 --grep TEXT
